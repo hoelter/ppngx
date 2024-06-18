@@ -2,24 +2,13 @@
 
 set -e
 
-PAPERLESS_PORT=8021
+PAPERLESS_PORT=8000
 PAPERLESS_UID=1000
 PAPERLESS_GID=1000
-PAPERLESS_VERSION=latest
+PAPERLESS_VERSION=2.10.0
 PAPERLESS_TIME_ZONE=America/Chicago
 PAPERLESS_OCR_LANGUAGE=eng
-
-SFTPGO_VERSION=v2.5.4
-SFTPGO_SFTP_PORT=2022
-SFTPGO_HTTP_PORT=8022
-PAPERLESS_URL=https://localhost:8022
-SFTPGO_ADMIN_USER=sftpadmin
-SFTPGO_ADMIN_PASSWORD=supersecret
-SFTPGO_PAPERLESS_USER=scanner
-SFTPGO_PAPERLESS_PASSWORD=anothersupersecret
-SFTPGO_SFTPD_KEX_ALGORITHMS=curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group14-sha256,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1
-SFTPGO_SFTPD_HOST_KEY_ALGORITHMS=rsa-sha2-256,rsa-sha2-512,ecdsa-sha2-nistp256,ssh-ed25519,ssh-rsa
-
+PAPERLESS_URL=https://localhost:8000
 PAPERLESS_SECRET_KEY=chamgemechamgemechamgemechamgemechamgemechamgemechamgemechamgeme
 
 REDIS_VERSION=6
@@ -33,9 +22,7 @@ POSTGRESQL_PASSWORD=paperlesschangeme
 
 echo "Creating Paperless Pod..."
 podman pod create --replace --name paperless \
-  -p ${PAPERLESS_PORT}:${PAPERLESS_PORT} \
-  -p ${SFTPGO_SFTP_PORT}:${SFTPGO_SFTP_PORT} \
-  -p ${SFTPGO_HTTP_PORT}:${SFTPGO_HTTP_PORT}
+  -p ${PAPERLESS_PORT}:${PAPERLESS_PORT}
 
 echo "Starting Redis..."
 podman volume create paperless-redis 2> /dev/null ||:
@@ -102,34 +89,3 @@ podman create --replace --pod paperless \
   ghcr.io/paperless-ngx/paperless-ngx:${PAPERLESS_VERSION}
 podman start paperless-webserver
 
-echo "Starting SFTPGo..."
-podman create --replace --pod paperless \
-  --restart=unless-stopped \
-  --name paperless-sftpgo \
-  -e SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN=1 \
-  -e SFTPGO_DEFAULT_ADMIN_USERNAME=${SFTPGO_ADMIN_USER} \
-  -e SFTPGO_DEFAULT_ADMIN_PASSWORD=${SFTPGO_ADMIN_PASSWORD} \
-  -e SFTPGO_HTTPD__BINDINGS__0__PORT=${SFTPGO_HTTP_PORT} \
-  -e SFTPGO_SFTPD__KEX_ALGORITHMS=${SFTPGO_SFTPD_KEX_ALGORITHMS} \
-  -e SFTPGO_SFTPD__HOST_KEY_ALGORITHMS=${SFTPGO_SFTPD_HOST_KEY_ALGORITHMS} \
-  -v paperless-sftpgo:/var/lib/sftpgo:Z \
-  -v paperless-consume:/opt/paperless/consume:rw,z \
-  ghcr.io/drakkan/sftpgo:${SFTPGO_VERSION}
-podman start paperless-sftpgo
-
-sleep 5
-
-JWT=$(curl -s -u ${SFTPGO_ADMIN_USER}:${SFTPGO_ADMIN_PASSWORD} http://127.0.0.1:${SFTPGO_HTTP_PORT}/api/v2/token | jq -r '.access_token')
-
-curl -s --header "Content-Type: application/json" \
-     --header 'Accept: application/json' -H "Authorization: Bearer ${JWT}" \
-     --request POST \
-     --data '{"username": "'${SFTPGO_PAPERLESS_USER}'", "password": "'${SFTPGO_PAPERLESS_PASSWORD}'", "status": 1, "home_dir": "/opt/paperless/consume", "permissions": {"/": ["*"]}}' \
-     http://127.0.0.1:${SFTPGO_HTTP_PORT}/api/v2/users
-
-SFTP_PUBLIC_KEY=$(podman exec -it paperless-sftpgo cat /var/lib/sftpgo/id_rsa.pub)
-
-echo "Add the SFTP Public Key to your scanner:"
-echo "${SFTP_PUBLIC_KEY}"
-
-echo "${SFTP_PUBLIC_KEY}" > ${PWD}/sftp_rsa_host_key.pub
